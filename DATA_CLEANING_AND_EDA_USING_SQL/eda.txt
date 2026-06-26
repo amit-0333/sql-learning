@@ -1,0 +1,369 @@
+USE laptops;
+
+-- 1. HEAD, TAIL, SAMPLE
+
+-- First 5 rows
+SELECT * FROM laptopdata ORDER BY `index` ASC LIMIT 5;
+
+-- Last 5 rows
+SELECT * FROM laptopdata ORDER BY `index` DESC LIMIT 5;
+
+-- Random 5 rows
+SELECT * FROM laptopdata ORDER BY RAND() LIMIT 5;
+
+
+-- 2. NUMERICAL COLUMN ANALYSIS (Price)
+
+-- 5 number summary
+SELECT
+    COUNT(Price)         AS count,
+    MIN(Price)           AS min,
+    MAX(Price)           AS max,
+    ROUND(AVG(Price), 2) AS mean,
+    ROUND(STD(Price), 2) AS std
+FROM laptopdata;
+
+-- Missing values
+SELECT COUNT(*) AS missing_price FROM laptopdata WHERE Price IS NULL;
+
+-- Outliers using IQR method
+WITH ordered AS (
+    SELECT Price, ROW_NUMBER() OVER (ORDER BY Price) AS rn,
+    COUNT(*) OVER() AS total
+    FROM laptopdata WHERE Price IS NOT NULL
+),
+quartiles AS (
+    SELECT
+        AVG(CASE WHEN rn BETWEEN FLOOR(total*0.25) AND CEIL(total*0.25) THEN Price END) AS q1,
+        AVG(CASE WHEN rn BETWEEN FLOOR(total*0.75) AND CEIL(total*0.75) THEN Price END) AS q3
+    FROM ordered
+),
+bounds AS (
+    SELECT
+        q1 - 1.5 * (q3 - q1) AS lower_bound,
+        q3 + 1.5 * (q3 - q1) AS upper_bound
+    FROM quartiles
+)
+SELECT * FROM laptopdata
+WHERE Price < (SELECT lower_bound FROM bounds)
+   OR Price > (SELECT upper_bound FROM bounds);
+
+-- Horizontal histogram (price distribution in buckets)
+SELECT
+    CONCAT(FLOOR(Price/10000)*10000, ' - ', FLOOR(Price/10000)*10000+9999) AS price_range,
+    COUNT(*)                                                                 AS count,
+    RPAD('', COUNT(*)/5, '*')                                               AS bar
+FROM laptopdata
+GROUP BY FLOOR(Price/10000)
+ORDER BY FLOOR(Price/10000);
+
+
+-- 3. CATEGORICAL COLUMN ANALYSIS (Company)
+
+-- Value counts with percentage
+SELECT
+    Company,
+    COUNT(*)                                         AS count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS percentage
+FROM laptopdata
+GROUP BY Company
+ORDER BY count DESC;
+
+-- Missing values
+SELECT COUNT(*) AS missing_company FROM laptopdata WHERE Company IS NULL;
+
+-- Pie chart simulation (count per category)
+SELECT
+    Company,
+    COUNT(*)              AS count,
+    RPAD('', COUNT(*)/3, '*') AS bar
+FROM laptopdata
+GROUP BY Company
+ORDER BY count DESC;
+
+
+-- 4. NUMERICAL - NUMERICAL (Price vs Ram)
+
+-- Side by side 8 number summary
+SELECT
+    'Price' AS metric,
+    COUNT(Price)         AS count,
+    MIN(Price)           AS min,
+    MAX(Price)           AS max,
+    ROUND(AVG(Price), 2) AS mean,
+    ROUND(STD(Price), 2) AS std
+FROM laptopdata
+UNION ALL
+SELECT
+    'Ram' AS metric,
+    COUNT(Ram)           AS count,
+    MIN(Ram)             AS min,
+    MAX(Ram)             AS max,
+    ROUND(AVG(Ram), 2)   AS mean,
+    ROUND(STD(Ram), 2)   AS std
+FROM laptopdata;
+
+-- Scatterplot simulation (avg price per ram bucket)
+SELECT
+    Ram,
+    ROUND(AVG(Price), 2) AS avg_price,
+    COUNT(*)             AS count,
+    RPAD('', COUNT(*)/2, '*') AS bar
+FROM laptopdata
+GROUP BY Ram
+ORDER BY Ram;
+
+-- Correlation between Price and Ram
+SELECT
+    ROUND(
+        (COUNT(*) * SUM(Price * Ram) - SUM(Price) * SUM(Ram)) /
+        SQRT(
+            (COUNT(*) * SUM(Price * Price) - SUM(Price) * SUM(Price)) *
+            (COUNT(*) * SUM(Ram * Ram)     - SUM(Ram)   * SUM(Ram))
+        ), 4
+    ) AS price_ram_correlation
+FROM laptopdata;
+
+
+-- 5. CATEGORICAL - CATEGORICAL (Company vs Gpu)
+
+-- Contingency table
+SELECT
+    Company,
+    SUM(Gpu = 'Intel')  AS Intel,
+    SUM(Gpu = 'Nvidia') AS Nvidia,
+    SUM(Gpu = 'AMD')    AS AMD,
+    SUM(Gpu = 'ARM')    AS ARM,
+    SUM(Gpu = 'Other')  AS Other,
+    COUNT(*)            AS total
+FROM laptopdata
+GROUP BY Company
+ORDER BY total DESC;
+
+-- Stacked bar chart simulation
+SELECT
+    Company,
+    Gpu,
+    COUNT(*) AS count,
+    RPAD('', COUNT(*)/2, '*') AS bar
+FROM laptopdata
+GROUP BY Company, Gpu
+ORDER BY Company, count DESC;
+
+
+-- 6. NUMERICAL - CATEGORICAL (Price vs Company)
+
+-- Distribution of Price across each Company
+SELECT
+    Company,
+    COUNT(Price)         AS count,
+    MIN(Price)           AS min,
+    MAX(Price)           AS max,
+    ROUND(AVG(Price), 2) AS mean,
+    ROUND(STD(Price), 2) AS std
+FROM laptopdata
+GROUP BY Company
+ORDER BY mean DESC;
+
+
+-- 8. MISSING VALUE TREATMENT
+
+-- Count nulls per column
+SELECT
+    SUM(Company IS NULL)           AS Company_nulls,
+    SUM(TypeName IS NULL)          AS TypeName_nulls,
+    SUM(Inches IS NULL)            AS Inches_nulls,
+    SUM(screen_type IS NULL)       AS screen_type_nulls,
+    SUM(resolution_width IS NULL)  AS resolution_width_nulls,
+    SUM(resolution_height IS NULL) AS resolution_height_nulls,
+    SUM(touchscreen IS NULL)       AS touchscreen_nulls,
+    SUM(cpu_brand IS NULL)         AS cpu_brand_nulls,
+    SUM(cpu_model IS NULL)         AS cpu_model_nulls,
+    SUM(cpu_speed IS NULL)         AS cpu_speed_nulls,
+    SUM(Ram IS NULL)               AS Ram_nulls,
+    SUM(Gpu IS NULL)               AS Gpu_nulls,
+    SUM(storage_type IS NULL)      AS storage_type_nulls,
+    SUM(primary_storage IS NULL)   AS primary_storage_nulls,
+    SUM(secondary_storage IS NULL) AS secondary_storage_nulls,
+    SUM(OpSys IS NULL)             AS OpSys_nulls,
+    SUM(Weight IS NULL)            AS Weight_nulls,
+    SUM(Price IS NULL)             AS Price_nulls
+FROM laptopdata;
+
+-- Fill Weight nulls with median (numerical → median)
+UPDATE laptopdata
+SET Weight = (
+    SELECT AVG(w) FROM (
+        SELECT Weight AS w FROM laptopdata
+        WHERE Weight IS NOT NULL
+        ORDER BY Weight
+        LIMIT 2 - (SELECT COUNT(*) FROM laptopdata WHERE Weight IS NOT NULL) % 2
+        OFFSET (SELECT (COUNT(*) - 1) / 2 FROM laptopdata WHERE Weight IS NOT NULL)
+    ) AS median_calc
+)
+WHERE Weight IS NULL;
+
+-- Fill storage_type nulls with mode (categorical → mode)
+UPDATE laptopdata
+SET storage_type = (
+    SELECT storage_type FROM laptopdata
+    WHERE storage_type IS NOT NULL
+    GROUP BY storage_type
+    ORDER BY COUNT(*) DESC
+    LIMIT 1
+)
+WHERE storage_type IS NULL;
+
+
+-- 9. FEATURE ENGINEERING
+
+-- Add ppi column (pixels per inch)
+ALTER TABLE laptopdata ADD COLUMN ppi INT;
+
+UPDATE laptopdata
+SET ppi = ROUND(
+    SQRT(resolution_width * resolution_width + resolution_height * resolution_height) / Inches
+);
+
+-- Add price_bracket column
+ALTER TABLE laptopdata ADD COLUMN price_bracket VARCHAR(10);
+
+UPDATE laptopdata
+SET price_bracket = CASE
+    WHEN Price < 25000  THEN 'Budget'
+    WHEN Price < 50000  THEN 'Mid'
+    WHEN Price < 100000 THEN 'High'
+    ELSE 'Premium'
+END;
+
+-- Verify new features
+SELECT `index`, Inches, resolution_width, resolution_height, ppi, Price, price_bracket
+FROM laptopdata LIMIT 10;
+
+
+-- 10. ONE HOT ENCODING
+
+-- Company
+ALTER TABLE laptopdata
+    ADD COLUMN Company_Dell    TINYINT(1) DEFAULT 0,
+    ADD COLUMN Company_Lenovo  TINYINT(1) DEFAULT 0,
+    ADD COLUMN Company_HP      TINYINT(1) DEFAULT 0,
+    ADD COLUMN Company_Asus    TINYINT(1) DEFAULT 0,
+    ADD COLUMN Company_Apple   TINYINT(1) DEFAULT 0,
+    ADD COLUMN Company_Acer    TINYINT(1) DEFAULT 0,
+    ADD COLUMN Company_MSI     TINYINT(1) DEFAULT 0,
+    ADD COLUMN Company_Toshiba TINYINT(1) DEFAULT 0,
+    ADD COLUMN Company_Other   TINYINT(1) DEFAULT 0;
+
+UPDATE laptopdata SET
+    Company_Dell    = (Company = 'Dell'),
+    Company_Lenovo  = (Company = 'Lenovo'),
+    Company_HP      = (Company = 'HP'),
+    Company_Asus    = (Company = 'Asus'),
+    Company_Apple   = (Company = 'Apple'),
+    Company_Acer    = (Company = 'Acer'),
+    Company_MSI     = (Company = 'MSI'),
+    Company_Toshiba = (Company = 'Toshiba'),
+    Company_Other   = (Company NOT IN ('Dell','Lenovo','HP','Asus','Apple','Acer','MSI','Toshiba'));
+
+-- TypeName
+ALTER TABLE laptopdata
+    ADD COLUMN TypeName_Notebook    TINYINT(1) DEFAULT 0,
+    ADD COLUMN TypeName_Gaming      TINYINT(1) DEFAULT 0,
+    ADD COLUMN TypeName_Ultrabook   TINYINT(1) DEFAULT 0,
+    ADD COLUMN TypeName_2in1        TINYINT(1) DEFAULT 0,
+    ADD COLUMN TypeName_Workstation TINYINT(1) DEFAULT 0,
+    ADD COLUMN TypeName_Netbook     TINYINT(1) DEFAULT 0;
+
+UPDATE laptopdata SET
+    TypeName_Notebook    = (TypeName = 'Notebook'),
+    TypeName_Gaming      = (TypeName = 'Gaming'),
+    TypeName_Ultrabook   = (TypeName = 'Ultrabook'),
+    TypeName_2in1        = (TypeName = '2 in 1 Convertible'),
+    TypeName_Workstation = (TypeName = 'Workstation'),
+    TypeName_Netbook     = (TypeName = 'Netbook');
+
+-- Gpu
+ALTER TABLE laptopdata
+    ADD COLUMN Gpu_Intel  TINYINT(1) DEFAULT 0,
+    ADD COLUMN Gpu_Nvidia TINYINT(1) DEFAULT 0,
+    ADD COLUMN Gpu_AMD    TINYINT(1) DEFAULT 0,
+    ADD COLUMN Gpu_ARM    TINYINT(1) DEFAULT 0,
+    ADD COLUMN Gpu_Other  TINYINT(1) DEFAULT 0;
+
+UPDATE laptopdata SET
+    Gpu_Intel  = (Gpu = 'Intel'),
+    Gpu_Nvidia = (Gpu = 'Nvidia'),
+    Gpu_AMD    = (Gpu = 'AMD'),
+    Gpu_ARM    = (Gpu = 'ARM'),
+    Gpu_Other  = (Gpu = 'Other');
+
+-- OpSys
+ALTER TABLE laptopdata
+    ADD COLUMN OpSys_Windows   TINYINT(1) DEFAULT 0,
+    ADD COLUMN OpSys_macOS     TINYINT(1) DEFAULT 0,
+    ADD COLUMN OpSys_Linux     TINYINT(1) DEFAULT 0,
+    ADD COLUMN OpSys_ChromeOS  TINYINT(1) DEFAULT 0,
+    ADD COLUMN OpSys_Android   TINYINT(1) DEFAULT 0,
+    ADD COLUMN OpSys_NoOS      TINYINT(1) DEFAULT 0;
+
+UPDATE laptopdata SET
+    OpSys_Windows  = (OpSys = 'Windows'),
+    OpSys_macOS    = (OpSys = 'macOS'),
+    OpSys_Linux    = (OpSys = 'Linux'),
+    OpSys_ChromeOS = (OpSys = 'Chrome OS'),
+    OpSys_Android  = (OpSys = 'Android'),
+    OpSys_NoOS     = (OpSys = 'No OS');
+
+-- cpu_brand
+ALTER TABLE laptopdata
+    ADD COLUMN cpu_Intel   TINYINT(1) DEFAULT 0,
+    ADD COLUMN cpu_AMD     TINYINT(1) DEFAULT 0,
+    ADD COLUMN cpu_Samsung TINYINT(1) DEFAULT 0,
+    ADD COLUMN cpu_Other   TINYINT(1) DEFAULT 0;
+
+UPDATE laptopdata SET
+    cpu_Intel   = (cpu_brand = 'Intel'),
+    cpu_AMD     = (cpu_brand = 'AMD'),
+    cpu_Samsung = (cpu_brand = 'Samsung'),
+    cpu_Other   = (cpu_brand = 'Other');
+
+-- screen_type
+ALTER TABLE laptopdata
+    ADD COLUMN screen_IPS_FullHD TINYINT(1) DEFAULT 0,
+    ADD COLUMN screen_IPS_4K     TINYINT(1) DEFAULT 0,
+    ADD COLUMN screen_IPS_QuadHD TINYINT(1) DEFAULT 0,
+    ADD COLUMN screen_IPS_Retina TINYINT(1) DEFAULT 0,
+    ADD COLUMN screen_IPS        TINYINT(1) DEFAULT 0,
+    ADD COLUMN screen_FullHD     TINYINT(1) DEFAULT 0,
+    ADD COLUMN screen_4K         TINYINT(1) DEFAULT 0,
+    ADD COLUMN screen_QuadHD     TINYINT(1) DEFAULT 0,
+    ADD COLUMN screen_Standard   TINYINT(1) DEFAULT 0;
+
+UPDATE laptopdata SET
+    screen_IPS_FullHD = (screen_type = 'IPS Full HD'),
+    screen_IPS_4K     = (screen_type = 'IPS 4K'),
+    screen_IPS_QuadHD = (screen_type = 'IPS Quad HD'),
+    screen_IPS_Retina = (screen_type = 'IPS Retina'),
+    screen_IPS        = (screen_type = 'IPS'),
+    screen_FullHD     = (screen_type = 'Full HD'),
+    screen_4K         = (screen_type = '4K'),
+    screen_QuadHD     = (screen_type = 'Quad HD'),
+    screen_Standard   = (screen_type = 'Standard');
+
+-- storage_type
+ALTER TABLE laptopdata
+    ADD COLUMN storage_SSD    TINYINT(1) DEFAULT 0,
+    ADD COLUMN storage_HDD    TINYINT(1) DEFAULT 0,
+    ADD COLUMN storage_Hybrid TINYINT(1) DEFAULT 0,
+    ADD COLUMN storage_Other  TINYINT(1) DEFAULT 0;
+
+UPDATE laptopdata SET
+    storage_SSD    = (storage_type = 'SSD'),
+    storage_HDD    = (storage_type = 'HDD'),
+    storage_Hybrid = (storage_type = 'Hybrid'),
+    storage_Other  = (storage_type = 'Other');
+
+-- Verify final table
+DESCRIBE laptopdata;
+SELECT * FROM laptopdata LIMIT 5;
