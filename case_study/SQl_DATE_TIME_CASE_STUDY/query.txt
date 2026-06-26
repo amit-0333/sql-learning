@@ -1,0 +1,169 @@
+SQL DATE TIME CASE STUDY - FLIGHTS DATASET
+
+-- Q1. Find the month with most number of flights
+
+SELECT MONTHNAME(Date_of_journey), COUNT(*)
+FROM flightss
+GROUP BY MONTHNAME(Date_of_journey)
+ORDER BY COUNT(*) DESC LIMIT 1;
+
+
+-- Q2. Which weekday has most costly flights
+
+SELECT DAYNAME(Date_of_journey), AVG(price)
+FROM flightss
+GROUP BY DAYNAME(Date_of_journey)
+ORDER BY AVG(price) DESC LIMIT 1;
+
+
+-- Q3. Find number of IndiGo flights every month
+
+SELECT MONTHNAME(Date_of_journey), COUNT(*) FROM flightss
+WHERE Airline='IndiGo'
+GROUP BY MONTHNAME(Date_of_journey)
+ORDER BY MONTHNAME(Date_of_journey);
+
+
+-- Q4. Find list of all flights that depart between 10AM and 2PM from Bangalore to Delhi
+
+SELECT * FROM flightss
+WHERE Source = 'Banglore' AND Destination = 'Delhi'
+AND TIME(Dep_time) BETWEEN '10:00:00' AND '14:00:00';
+
+
+-- Q5. Find the number of flights departing on weekends from Bangalore
+
+SELECT COUNT(*) FROM flightss
+WHERE source = 'banglore' AND
+DAYNAME(date_of_journey) IN ('saturday','sunday');
+
+
+-- Q6. Calculate the arrival time for all flights by adding the duration to the departure time
+
+ALTER TABLE flightss ADD COLUMN departure DATETIME;
+
+UPDATE flightss
+SET departure = STR_TO_DATE(CONCAT(date_of_journey,' ',dep_time),'%Y-%m-%d %H:%i');
+
+ALTER TABLE flightss ADD COLUMN duration_mins INTEGER,
+ADD COLUMN arrival DATETIME;
+
+UPDATE flightss
+SET duration_mins =
+CASE
+    WHEN duration LIKE '%h' AND duration NOT LIKE '% %' THEN
+        REPLACE(duration, 'h', '') * 60
+    WHEN duration LIKE '%h %m' THEN
+        REPLACE(SUBSTRING_INDEX(duration,' ',1), 'h', '') * 60 +
+        REPLACE(SUBSTRING_INDEX(duration,' ',-1), 'm', '')
+    WHEN duration LIKE '%m' THEN
+        REPLACE(duration, 'm', '')
+    ELSE NULL
+END;
+
+UPDATE flightss
+SET arrival = DATE_ADD(departure, INTERVAL duration_mins MINUTE);
+
+
+-- Q7. Calculate the arrival date for all the flights
+
+SELECT DATE(arrival) FROM flightss;
+
+
+-- Q8. Find the number of flights which travel on multiple dates
+
+SELECT COUNT(*) FROM flightss
+WHERE DATE(departure) != DATE(arrival);
+
+
+-- Q9. Average duration of flights between all city pairs in xh ym format
+
+SELECT source, destination,
+TIME_FORMAT(SEC_TO_TIME(AVG(duration_mins)*60),'%kh %im') AS 'avg_duration'
+FROM flightss
+GROUP BY source, destination;
+
+
+-- Q10. Find all flights which departed before midnight but arrived after midnight having only 0 stops
+
+SELECT * FROM flightss
+WHERE total_stops = 'non-stop' AND
+DATE(departure) < DATE(arrival);
+
+
+-- Q11. Find quarter wise number of flights for each airline
+
+SELECT airline, QUARTER(departure), COUNT(*)
+FROM flightss
+GROUP BY airline, QUARTER(departure);
+
+
+-- Q12. Average time duration and price for non-stop vs with stops flights
+
+WITH stop_table AS (
+    SELECT *,
+        CASE
+            WHEN Total_stops = 'non-stop' THEN 'non-stop'
+            ELSE 'with stop'
+        END AS 'stops'
+    FROM flightss
+)
+SELECT stops,
+TIME_FORMAT(SEC_TO_TIME(AVG(duration_mins)*60),'%kh %im') AS 'avg_duration',
+AVG(price) AS 'avg_price'
+FROM stop_table
+GROUP BY stops;
+
+
+-- Q13. Find all Air India flights in a given date range originating from Delhi
+
+SELECT * FROM flightss
+WHERE airline = 'Air India' AND
+DATE(departure) BETWEEN '2019-03-01' AND '2019-03-10';
+
+
+-- Q14. Find the longest flight of each airline
+
+SELECT airline,
+TIME_FORMAT(SEC_TO_TIME(MAX(duration_mins)*60),'%kh %im') AS 'max_duration'
+FROM flightss
+GROUP BY airline
+ORDER BY MAX(duration_mins) DESC;
+
+
+-- Q15. Find all pairs of cities having average time duration > 3 hours
+
+SELECT source, destination,
+TIME_FORMAT(SEC_TO_TIME(AVG(duration_mins)*60),'%kh %im') AS 'avg_duration'
+FROM flightss
+GROUP BY source, destination
+HAVING AVG(duration_mins) > 180;
+
+
+-- Q16. Weekday vs time grid showing frequency of flights from Bangalore and Delhi
+
+SELECT
+    DAYNAME(departure) AS weekday,
+    SUM(CASE WHEN HOUR(departure) BETWEEN 0 AND 5 THEN 1 ELSE 0 END) AS '12AM - 6AM',
+    SUM(CASE WHEN HOUR(departure) BETWEEN 6 AND 11 THEN 1 ELSE 0 END) AS '6AM - 12PM',
+    SUM(CASE WHEN HOUR(departure) BETWEEN 12 AND 17 THEN 1 ELSE 0 END) AS '12PM - 6PM',
+    SUM(CASE WHEN HOUR(departure) BETWEEN 18 AND 23 THEN 1 ELSE 0 END) AS '6PM - 12AM'
+FROM flightss
+WHERE source IN ('Banglore', 'Delhi')
+GROUP BY DAYOFWEEK(departure), weekday
+ORDER BY DAYOFWEEK(departure);
+
+
+-- Q17. Weekday vs time grid showing avg flight price from Bangalore to Delhi
+
+SELECT
+    DAYNAME(departure) AS weekday,
+    AVG(CASE WHEN HOUR(departure) BETWEEN 0 AND 5 THEN price END) AS '12AM - 6AM',
+    AVG(CASE WHEN HOUR(departure) BETWEEN 6 AND 11 THEN price END) AS '6AM - 12PM',
+    AVG(CASE WHEN HOUR(departure) BETWEEN 12 AND 17 THEN price END) AS '12PM - 6PM',
+    AVG(CASE WHEN HOUR(departure) BETWEEN 18 AND 23 THEN price END) AS '6PM - 12AM'
+FROM flightss
+WHERE source = 'Banglore'
+  AND destination = 'Delhi'
+GROUP BY DAYOFWEEK(departure), DAYNAME(departure)
+ORDER BY DAYOFWEEK(departure);
