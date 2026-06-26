@@ -1,0 +1,278 @@
+CREATE DATABASE laptops;
+USE laptops;
+
+-- Check total number of rows
+SELECT COUNT(*) FROM laptopdata;
+
+-- Preview data with row numbers (read only, no table change)
+SELECT
+    ROW_NUMBER() OVER(ORDER BY (SELECT NULL)) AS `index`,
+    laptopdata.*
+FROM laptopdata;
+
+-- Drop auto-generated index column from CSV import
+ALTER TABLE laptopdata DROP COLUMN `Unnamed: 0`;
+
+-- Add index column at first position
+ALTER TABLE laptopdata ADD COLUMN `index` INT FIRST;
+
+-- Populate index using variable (guaranteed unique per row)
+UPDATE laptopdata
+SET `index` = (@row := @row + 1)
+WHERE (@row := 0) = 0 OR TRUE;
+
+-- Remove all rows where ANY column has a NULL value
+DELETE FROM laptopdata
+WHERE Company IS NULL
+   OR TypeName IS NULL
+   OR Inches IS NULL
+   OR ScreenResolution IS NULL
+   OR Cpu IS NULL
+   OR Ram IS NULL
+   OR Memory IS NULL
+   OR Gpu IS NULL
+   OR OpSys IS NULL
+   OR Weight IS NULL
+   OR Price IS NULL;
+
+-- Verify null removal (should return 0)
+SELECT COUNT(*) FROM laptopdata
+WHERE Company IS NULL
+   OR TypeName IS NULL
+   OR Inches IS NULL
+   OR Price IS NULL;
+
+-- Add truly unique primary key for duplicate detection
+ALTER TABLE laptopdata ADD COLUMN uid INT AUTO_INCREMENT PRIMARY KEY;
+
+-- Delete duplicates keeping lowest uid (first occurrence)
+DELETE FROM laptopdata
+WHERE uid NOT IN (
+    SELECT * FROM (
+        SELECT MIN(uid)
+        FROM laptopdata
+        GROUP BY Company, TypeName, Inches, ScreenResolution,
+                 Cpu, Ram, Memory, Gpu, OpSys, Weight, Price
+    ) AS keep_rows
+);
+
+-- Drop helper column after duplicate removal
+ALTER TABLE laptopdata DROP COLUMN uid;
+
+-- Verify no duplicates remain (should return empty)
+SELECT Company, TypeName, Inches, Price,
+    COUNT(*) AS duplicate_count
+FROM laptopdata
+GROUP BY Company, TypeName, Inches, ScreenResolution,
+         Cpu, Ram, Memory, Gpu, OpSys, Weight, Price
+HAVING COUNT(*) > 1;
+
+-- Remove 'GB' text and convert to integer
+UPDATE laptopdata SET Ram = REPLACE(Ram, 'GB', '');
+ALTER TABLE laptopdata MODIFY COLUMN Ram INT;
+
+-- Remove 'kg' text
+UPDATE laptopdata SET Weight = REPLACE(Weight, 'kg', '');
+
+-- Set invalid '?' value to NULL
+UPDATE laptopdata SET Weight = NULL WHERE Weight = '?';
+
+-- Convert to decimal
+ALTER TABLE laptopdata MODIFY COLUMN Weight DECIMAL(10,2);
+
+-- Round and convert to integer
+UPDATE laptopdata SET Price = ROUND(Price);
+ALTER TABLE laptopdata MODIFY COLUMN Price INT;
+
+-- Categorise into clean groups
+UPDATE laptopdata
+SET OpSys = CASE
+    WHEN OpSys LIKE '%Windows%' THEN 'Windows'
+    WHEN OpSys LIKE '%macOS%'   THEN 'macOS'
+    WHEN OpSys LIKE '%Mac OS X%'THEN 'macOS'
+    WHEN OpSys LIKE '%Linux%'   THEN 'Linux'
+    WHEN OpSys LIKE '%Chrome%'  THEN 'Chrome OS'
+    WHEN OpSys LIKE '%Android%' THEN 'Android'
+    WHEN OpSys LIKE '%No OS%'   THEN 'No OS'
+    ELSE 'Unknown'
+END;
+
+-- Categorise into brands
+UPDATE laptopdata
+SET Gpu = CASE
+    WHEN Gpu LIKE '%Nvidia%' THEN 'Nvidia'
+    WHEN Gpu LIKE '%AMD%'    THEN 'AMD'
+    WHEN Gpu LIKE '%Intel%'  THEN 'Intel'
+    WHEN Gpu LIKE '%ARM%'    THEN 'ARM'
+    ELSE 'Other'
+END;
+
+-- Add storage columns
+ALTER TABLE laptopdata
+ADD COLUMN storage_type VARCHAR(10),
+ADD COLUMN primary_storage INT,
+ADD COLUMN secondary_storage INT;
+
+-- Classify storage type
+UPDATE laptopdata SET storage_type = CASE
+    WHEN Memory LIKE '%SSD%'    AND Memory NOT LIKE '%HDD%'    AND Memory NOT LIKE '%Hybrid%' THEN 'SSD'
+    WHEN Memory LIKE '%HDD%'    AND Memory NOT LIKE '%SSD%'    AND Memory NOT LIKE '%Hybrid%' THEN 'HDD'
+    WHEN Memory LIKE '%Flash%'                                                                THEN 'SSD'
+    WHEN Memory LIKE '%Hybrid%'                                                               THEN 'Hybrid'
+    WHEN Memory LIKE '%SSD%'    AND Memory LIKE '%HDD%'                                       THEN 'Hybrid'
+    WHEN Memory = '?'                                                                         THEN NULL
+    ELSE 'Other'
+END;
+
+-- Extract primary storage (before '+'), handle '?' safely
+UPDATE laptopdata
+SET primary_storage = CASE
+    WHEN Memory = '?' OR Memory IS NULL THEN NULL
+    ELSE CAST(REGEXP_REPLACE(SUBSTRING_INDEX(Memory, '+', 1), '[^0-9]', '') AS UNSIGNED)
+END;
+
+-- Extract secondary storage (after '+'), handle '?' safely
+UPDATE laptopdata
+SET secondary_storage = CASE
+    WHEN Memory NOT LIKE '%+%'          THEN NULL
+    WHEN Memory = '?' OR Memory IS NULL THEN NULL
+    ELSE CAST(REGEXP_REPLACE(SUBSTRING_INDEX(Memory, '+', -1), '[^0-9]', '') AS UNSIGNED)
+END;
+
+-- Convert TB to GB for primary storage
+UPDATE laptopdata
+SET primary_storage = CASE
+    WHEN Memory LIKE '%TB%' AND Memory NOT LIKE '%+%' THEN primary_storage * 1024
+    ELSE primary_storage
+END;
+
+-- Convert TB to GB for secondary storage
+UPDATE laptopdata
+SET secondary_storage = CASE
+    WHEN Memory LIKE '%+%' AND SUBSTRING_INDEX(Memory, '+', -1) LIKE '%TB%' THEN secondary_storage * 1024
+    ELSE secondary_storage
+END;
+
+-- Drop original Memory column
+ALTER TABLE laptopdata DROP COLUMN Memory;
+
+-- Add CPU columns
+ALTER TABLE laptopdata
+ADD COLUMN cpu_brand VARCHAR(10),
+ADD COLUMN cpu_model VARCHAR(20),
+ADD COLUMN cpu_speed DECIMAL(10,2);
+
+-- Extract brand
+UPDATE laptopdata
+SET cpu_brand = CASE
+    WHEN Cpu LIKE '%Intel%'   THEN 'Intel'
+    WHEN Cpu LIKE '%AMD%'     THEN 'AMD'
+    WHEN Cpu LIKE '%Samsung%' THEN 'Samsung'
+    ELSE 'Other'
+END;
+
+-- Extract CPU model
+UPDATE laptopdata
+SET cpu_model = CASE
+    WHEN Cpu LIKE '%Core i3%'    THEN 'Core i3'
+    WHEN Cpu LIKE '%Core i5%'    THEN 'Core i5'
+    WHEN Cpu LIKE '%Core i7%'    THEN 'Core i7'
+    WHEN Cpu LIKE '%Core M%'     THEN 'Core M'
+    WHEN Cpu LIKE '%Celeron%'    THEN 'Celeron'
+    WHEN Cpu LIKE '%Pentium%'    THEN 'Pentium'
+    WHEN Cpu LIKE '%Atom%'       THEN 'Atom'
+    WHEN Cpu LIKE '%Xeon%'       THEN 'Xeon'
+    WHEN Cpu LIKE '%Ryzen%'      THEN 'Ryzen'
+    WHEN Cpu LIKE '%A4-Series%'  THEN 'A4-Series'
+    WHEN Cpu LIKE '%A6-Series%'  THEN 'A6-Series'
+    WHEN Cpu LIKE '%A8-Series%'  THEN 'A8-Series'
+    WHEN Cpu LIKE '%A9-Series%'  THEN 'A9-Series'
+    WHEN Cpu LIKE '%A10-Series%' THEN 'A10-Series'
+    WHEN Cpu LIKE '%A12-Series%' THEN 'A12-Series'
+    WHEN Cpu LIKE '%E-Series%'   THEN 'E-Series'
+    WHEN Cpu LIKE '%FX%'         THEN 'FX'
+    WHEN Cpu LIKE '%Cortex%'     THEN 'Cortex'
+    ELSE 'Other'
+END;
+
+-- Extract CPU speed (GHz number)
+UPDATE laptopdata
+SET cpu_speed = CAST(
+    REGEXP_SUBSTR(Cpu, '[0-9]+\\.?[0-9]*(?=GHz)')
+AS DECIMAL(10,2));
+
+-- Drop original Cpu column
+ALTER TABLE laptopdata DROP COLUMN Cpu;
+
+-- Add screen columns
+ALTER TABLE laptopdata
+ADD COLUMN touchscreen INT,
+ADD COLUMN resolution_width INT,
+ADD COLUMN resolution_height INT,
+ADD COLUMN screen_type VARCHAR(20);
+
+-- Touchscreen flag (1 or 0)
+UPDATE laptopdata
+SET touchscreen = CASE
+    WHEN ScreenResolution LIKE '%Touchscreen%' THEN 1
+    ELSE 0
+END;
+
+-- Extract resolution width (before 'x')
+UPDATE laptopdata
+SET resolution_width = CAST(
+    REGEXP_SUBSTR(ScreenResolution, '[0-9]+(?=x[0-9])')
+AS UNSIGNED);
+
+-- Extract resolution height (after 'x')
+UPDATE laptopdata
+SET resolution_height = CAST(
+    REGEXP_SUBSTR(ScreenResolution, '(?<=x)[0-9]+')
+AS UNSIGNED);
+
+-- Classify screen type
+UPDATE laptopdata
+SET screen_type = CASE
+    WHEN ScreenResolution LIKE '%IPS%' AND ScreenResolution LIKE '%4K%'     THEN 'IPS 4K'
+    WHEN ScreenResolution LIKE '%IPS%' AND ScreenResolution LIKE '%Quad HD%' THEN 'IPS Quad HD'
+    WHEN ScreenResolution LIKE '%IPS%' AND ScreenResolution LIKE '%Retina%'  THEN 'IPS Retina'
+    WHEN ScreenResolution LIKE '%IPS%' AND ScreenResolution LIKE '%Full HD%' THEN 'IPS Full HD'
+    WHEN ScreenResolution LIKE '%IPS%'                                       THEN 'IPS'
+    WHEN ScreenResolution LIKE '%4K%'                                        THEN '4K'
+    WHEN ScreenResolution LIKE '%Quad HD%'                                   THEN 'Quad HD'
+    WHEN ScreenResolution LIKE '%Full HD%'                                   THEN 'Full HD'
+    ELSE 'Standard'
+END;
+
+-- Drop original ScreenResolution column
+ALTER TABLE laptopdata DROP COLUMN ScreenResolution;
+
+-- Reset index with unique sequential values
+UPDATE laptopdata
+SET `index` = (@row := @row + 1)
+WHERE (@row := 0) = 0 OR TRUE;
+
+-- Set correct data types and reorder all columns
+ALTER TABLE laptopdata
+    MODIFY COLUMN `index`            INT NOT NULL PRIMARY KEY FIRST,
+    MODIFY COLUMN Company            VARCHAR(50)       AFTER `index`,
+    MODIFY COLUMN TypeName           VARCHAR(50)       AFTER Company,
+    MODIFY COLUMN Inches             DECIMAL(4,1)      AFTER TypeName,
+    MODIFY COLUMN screen_type        VARCHAR(20)       AFTER Inches,
+    MODIFY COLUMN resolution_width   SMALLINT UNSIGNED AFTER screen_type,
+    MODIFY COLUMN resolution_height  SMALLINT UNSIGNED AFTER resolution_width,
+    MODIFY COLUMN touchscreen        TINYINT(1)        AFTER resolution_height,
+    MODIFY COLUMN cpu_brand          VARCHAR(10)       AFTER touchscreen,
+    MODIFY COLUMN cpu_model          VARCHAR(20)       AFTER cpu_brand,
+    MODIFY COLUMN cpu_speed          DECIMAL(3,1)      AFTER cpu_model,
+    MODIFY COLUMN Ram                TINYINT UNSIGNED  AFTER cpu_speed,
+    MODIFY COLUMN Gpu                VARCHAR(20)       AFTER Ram,
+    MODIFY COLUMN storage_type       VARCHAR(10)       AFTER Gpu,
+    MODIFY COLUMN primary_storage    SMALLINT UNSIGNED AFTER storage_type,
+    MODIFY COLUMN secondary_storage  SMALLINT UNSIGNED AFTER primary_storage,
+    MODIFY COLUMN OpSys              VARCHAR(20)       AFTER secondary_storage,
+    MODIFY COLUMN Weight             DECIMAL(4,2)      AFTER OpSys,
+    MODIFY COLUMN Price              FLOAT             AFTER Weight;
+
+DESCRIBE laptopdata;
+SELECT * FROM laptopdata LIMIT 5;
